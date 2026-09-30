@@ -1,6 +1,6 @@
 # FRDM-MCXA153 + LCD-PAR-S035 温度ダッシュボード 実装計画
 
-ステータス: **計画（承認待ち）** ／ まだコードは書いていない
+ステータス: **計画（フェーズ 2 着手の承認待ち）** ／ まだコードは書いていない
 
 ---
 
@@ -85,19 +85,26 @@ NXP の Web サイト（nxp.com、mcuxpresso.nxp.com）は、この作業環境�
 
 ---
 
-## 2. 要確認（質問）
+## 2. 要確認（質問）と現在の状況
 
-| # | 内容 | 理由 / 推奨 |
-|---|---|---|
-| Q1 | **LCD-PAR-S035 のインターフェース選択スイッチ（SPI/8080）の位置と設定値** | ユーザーガイドを入手できなかった。基板のシルク印刷かガイドで確認をお願いしたい |
-| Q2 | **FRDM-MCXA153 に PMOD コネクタやパラレル LCD コネクタが本当にないか**。ない場合、ジャンパ線での配線でよいか。配線案 A（Arduino/LPSPI1）と B（mikroBUS/LPSPI0）のどちらにするか | 回路図が見られなかった。推奨は案 A |
-| Q3 | Arduino の D2/D4/D10/D11/D13 がボード上のジャンパやはんだブリッジで別の回路とつながっていないか | 回路図で確認が必要 |
-| Q4 | LCD-PAR-S035 の PMOD の VCC は 3.3 V でよいか。バックライトの電流を Arduino の 3V3 ピンから取ってよいか | 電源の仕様を確認できていない |
-| Q5 | LPSPI の最大 SCK（MCXA153 のデータシート）と、ST7796S のシリアル書き込みクロックの仕様 | 15 MHz から始め、24〜30 MHz を実機で試す計画にしている |
-| Q6 | eDMA が SRAMX（0x0400_0000）を読めるか | リファレンスマニュアルで要確認。確認できるまでは、DMA バッファを SRAM（0x2000_0000）に置く |
-| Q7 | P3T1755 のレジスタ形式（12 ビット、0.0625 °C/LSB と想定）と、I3C のプルアップ（P1_11 の PUR）まわりのボード設定 | データシートと回路図で確認する |
-| Q8 | デザインのパラメータ: **ゲージの温度範囲**（案: 10〜40 °C）、**スパークラインの期間**（案: 直近 4 分を 1 秒周期で 240 点）、センサーの読み取り周期（案: 250 ms） | 見た目に直結するので決めてほしい |
-| Q9 | SDK の取り込み方法: (a) 必要な NXP リポジトリを git submodule でコミット固定し、自前の最小 CMake でビルドする【推奨】、(b) NXP 公式の west + Kconfig ビルドを使う | (a) にすると依存が小さく、ビルドの中身を追いやすい |
+2026-09-30 時点の回答:
+- LCD-PAR-S035 が表示できるハードウェア（配線とスイッチ設定）はすでにある。
+- SDK は推奨の (a) で取り込む。
+- それ以外の項目はまだ決まっていない。
+
+決まっていない項目のために実装を止めないよう、**値はすべて 1 か所にまとめて仮の値で進め、あとから差し替えられるようにする**。
+
+| # | 内容 | 状況 | 決まるまでの扱い |
+|---|---|---|---|
+| Q1 | LCD のインターフェース選択スイッチ（SPI/8080） | **解決**（表示できるハードウェアがある） | — |
+| Q2 | LCD の接続方法と、使っているピン（SCK/MOSI/CS/D/C/RESET） | **未確定**（接続済みだが、どのピンかは分かっていない） | `board/board_pins.h` にまとめ、仮に案 A（Arduino/LPSPI1: SCK=P2_12, MOSI=P2_13, CS=P2_6, D/C=P2_4, RESET=P2_5）にする。ピンが分かったら、このファイルだけ直せばよい |
+| Q3 | Arduino ピンの基板上の競合 | Q2 に含める | 同上 |
+| Q4 | LCD の電源 | **解決**（表示できるハードウェアがある） | — |
+| Q5 | SPI の最大クロック | 未確定 | `LCD_SPI_BAUD_HZ` の初期値を 15 MHz にし、フェーズ 2 で 15/24/30 MHz を切り替えて試せるようにする |
+| Q6 | eDMA が SRAMX を読めるか | 未確定 | DMA バッファは SRAM に置く（安全側） |
+| Q7 | P3T1755 のデータ形式と I3C のプルアップ | 未確定 | SDK サンプルの手順と設定に合わせる。フェーズ 3 で、UART に出した生の値を見て確かめる |
+| Q8 | ゲージの範囲、履歴の期間、読み取り周期 | 未確定 | `src/app/theme.h` と `src/app/config.h` に仮の値（10〜40 °C、4 分 × 240 点、250 ms）で定義し、ホストのシミュレータで見た目を見ながら決める |
+| Q9 | SDK の取り込み方法 | **決定: (a)** | NXP の各リポジトリを `sdk/` 以下に git submodule としてコミット固定する（mcuxsdk-core, mcux-devices-mcx, mcux-component。ボード関連のファイルは mcuxsdk-examples から `board/` にコピーする）。自前の CMake で、必要なソースだけを列挙してビルドする |
 
 ---
 
@@ -194,8 +201,9 @@ NXP の Web サイト（nxp.com、mcuxpresso.nxp.com）は、この作業環境�
 CMakeLists.txt                 # target: firmware (arm) / host tests (native)
 cmake/arm-none-eabi.cmake      # toolchain file
 cmake/mcux_sdk.cmake           # 必要な SDK ソースだけを列挙
-sdk/                           # git submodule (Q9-a): mcuxsdk-core, mcux-devices-mcx, mcux-component
+sdk/                           # git submodule（Q9 は (a) に決定）: mcuxsdk-core, mcux-devices-mcx, mcux-component
 board/                         # SDK の frdmmcxa153 から必要最小限をコピーして手直し
+  board_pins.h                 # LCD のピン割り当てと SPI クロック（Q2/Q5 の差し替え先はここだけ）
   board.c/h clock_config.c/h pin_mux.c/h
   MCXA153_app.ld               # SRAMX にスタックを置く自前のリンカスクリプト
 src/
@@ -209,6 +217,7 @@ src/
   app/history.c/h              # リングバッファ、最高・最低
   app/dirty.c/h                # ダーティ矩形の管理と統合
   app/theme.h                  # 色、太さ、余白
+  app/config.h                 # ゲージの範囲、履歴の期間、読み取り周期（Q8 の仮の値）
 gfx/                           # 描画エンジン（C99、SDK に依存しない）
   gfx_fixed.h gfx_path.c gfx_flatten.c gfx_stroke.c gfx_raster.c
   gfx_paint.c gfx_blend.c gfx_dither.c gfx_tile.c gfx_font.c
@@ -231,7 +240,7 @@ docs/PLAN.md
 ツールチェーン: この環境には arm-none-eabi-gcc が入っていないが、apt で `gcc-arm-none-eabi` 13.2 を入れられることを確認した。
 
 ### フェーズ 1: 調査と計画（本書）
-- 完了条件: 本書が承認され、第 2 章の「要確認」の回答がそろうこと。
+- 完了条件: 本書が承認されること。未確定の項目は、第 2 章のとおり仮の値で進める。
 
 ### フェーズ 2: LCD の初期化、ベタ塗り、色の確認
 - 実装: クロック 96 MHz、ピン設定、LPSPI（まず 15 MHz）、ST7796S の初期化（SDK の LCD-PAR-S035 プリセットと Zephyr overlay の値を突き合わせる）。
